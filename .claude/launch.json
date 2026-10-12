@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "flex",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "flex", "run", "dev"],
+      "port": 3000
+    }
+  ]
+}
