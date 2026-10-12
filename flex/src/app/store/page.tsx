@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { getCurrentUser } from "@/lib/auth";
+import { paymentMode } from "@/lib/stripe";
 import { formatMoney, nextTier, tierFor } from "@/lib/tiers";
 import TierBadge from "@/components/TierBadge";
 import StoreClient from "@/components/store/StoreClient";
@@ -11,7 +12,14 @@ export const metadata: Metadata = {
   title: "Store · FLEX",
 };
 
-export default async function StorePage() {
+export default async function StorePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
+  const params = await searchParams;
+  const canceled = params.canceled === "1";
+  const mode = paymentMode();
   const user = await getCurrentUser();
   const total = user?.total_spent_cents ?? 0;
   const tier = tierFor(total);
@@ -22,6 +30,24 @@ export default async function StorePage() {
 
   return (
     <div className="space-y-6 pb-16">
+      {canceled && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface-2 py-2.5 pr-2 pl-4 text-sm text-foreground"
+        >
+          <span>Checkout canceled — you weren&apos;t charged.</span>
+          <Link
+            href="/store"
+            replace
+            scroll={false}
+            aria-label="Dismiss notice"
+            className="shrink-0 rounded-full p-2 text-muted hover:bg-surface hover:text-foreground"
+          >
+            ✕
+          </Link>
+        </div>
+      )}
+
       <header className="pt-2">
         <p className="text-xs font-semibold tracking-[0.3em] text-gold uppercase">The Store</p>
         <h1 className="text-gold-gradient mt-1 text-4xl font-black tracking-tight sm:text-5xl">
@@ -79,7 +105,7 @@ export default async function StorePage() {
         </section>
       )}
 
-      <StoreClient loggedIn={!!user} />
+      <StoreClient loggedIn={!!user} mode={mode} />
     </div>
   );
 }

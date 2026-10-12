@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect } from "react";
+import type { PaymentMode } from "@/lib/stripe";
 import { formatMoney } from "@/lib/tiers";
 
 type Props = {
   amountCents: number;
   label: string;
   message: string;
+  mode: PaymentMode;
   pending: boolean;
   error: string | null;
   action: (formData: FormData) => void;
@@ -18,6 +20,7 @@ export default function CheckoutSheet({
   amountCents,
   label,
   message,
+  mode,
   pending,
   error,
   action,
@@ -51,11 +54,20 @@ export default function CheckoutSheet({
       >
         <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-border sm:hidden" aria-hidden />
 
-        <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-center text-xs font-bold tracking-wider text-amber-300 uppercase">
-          🧪 Test mode — no real money is charged
-        </div>
+        {mode === "fake" && (
+          <div className="mb-4 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-center text-xs font-bold tracking-wider text-amber-300 uppercase">
+            🧪 Test mode — no real money is charged
+          </div>
+        )}
+        {mode === "stripe-test" && (
+          <div className="mb-4 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-center text-xs leading-relaxed text-amber-200">
+            <span className="font-bold tracking-wider text-amber-300 uppercase">🧪 Test mode</span> — use card{" "}
+            <span className="font-mono font-semibold whitespace-nowrap text-amber-100">4242 4242 4242 4242</span>, any
+            future date, any CVC. No real money is charged.
+          </div>
+        )}
 
-        <div className="mt-4 flex items-start justify-between gap-3">
+        <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs tracking-widest text-muted uppercase">Checkout</p>
             <h2 id="checkout-title" className="text-lg font-bold text-foreground">
@@ -84,40 +96,69 @@ export default function CheckoutSheet({
           <input type="hidden" name="amount_cents" value={amountCents} />
           <input type="hidden" name="message" value={message} />
 
-          {/* A fake card that IS the confirm button. No card details are collected. */}
-          <button
-            type="submit"
-            disabled={pending}
-            className="group relative block aspect-[1.75/1] w-full overflow-hidden rounded-2xl border border-gold/50 p-5 text-left shadow-[0_10px_40px_-10px_rgba(212,175,55,0.6)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_14px_50px_-8px_rgba(212,175,55,0.8)] active:translate-y-0 disabled:cursor-wait disabled:opacity-80"
-            style={{
-              background:
-                "linear-gradient(135deg, #1a1608 0%, #3a2f0e 35%, #8a6d1c 70%, #d4af37 100%)",
-            }}
-          >
-            <span
-              aria-hidden
-              className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent transition-transform duration-700 group-hover:translate-x-full"
-            />
-            <span className="flex items-center justify-between">
-              <span className="text-sm font-black tracking-[0.35em] text-gold-bright">FLEX</span>
-              <span className="text-[10px] font-semibold tracking-widest text-gold-bright/70 uppercase">
-                Test card
+          {mode === "fake" ? (
+            // A fake card that IS the confirm button. No card details are collected.
+            <button
+              type="submit"
+              disabled={pending}
+              className="group relative block aspect-[1.75/1] w-full overflow-hidden rounded-2xl border border-gold/50 p-5 text-left shadow-[0_10px_40px_-10px_rgba(212,175,55,0.6)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_14px_50px_-8px_rgba(212,175,55,0.8)] active:translate-y-0 disabled:cursor-wait disabled:opacity-80"
+              style={{
+                background:
+                  "linear-gradient(135deg, #1a1608 0%, #3a2f0e 35%, #8a6d1c 70%, #d4af37 100%)",
+              }}
+            >
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent transition-transform duration-700 group-hover:translate-x-full"
+              />
+              <span className="flex items-center justify-between">
+                <span className="text-sm font-black tracking-[0.35em] text-gold-bright">FLEX</span>
+                <span className="text-[10px] font-semibold tracking-widest text-gold-bright/70 uppercase">
+                  Test card
+                </span>
               </span>
-            </span>
-            <span
-              aria-hidden
-              className="mt-4 block h-7 w-10 rounded-md bg-gradient-to-br from-gold-bright to-[#a8841f] opacity-90"
-            />
-            <span className="mt-3 block font-mono text-sm tracking-[0.2em] text-foreground/70">
-              •••• •••• •••• FLEX
-            </span>
-            <span className="absolute right-5 bottom-4 left-5 flex items-end justify-between">
-              <span className="text-[10px] tracking-widest text-foreground/60 uppercase">Simulated payment</span>
-              <span className="rounded-lg bg-background/70 px-3 py-1.5 text-sm font-bold text-gold-bright">
-                {pending ? "Flexing…" : `Tap to pay ${formatMoney(amountCents)}`}
+              <span
+                aria-hidden
+                className="mt-4 block h-7 w-10 rounded-md bg-gradient-to-br from-gold-bright to-[#a8841f] opacity-90"
+              />
+              <span className="mt-3 block font-mono text-sm tracking-[0.2em] text-foreground/70">
+                •••• •••• •••• FLEX
               </span>
-            </span>
-          </button>
+              <span className="absolute right-5 bottom-4 left-5 flex items-end justify-between">
+                <span className="text-[10px] tracking-widest text-foreground/60 uppercase">Simulated payment</span>
+                <span className="rounded-lg bg-background/70 px-3 py-1.5 text-sm font-bold text-gold-bright">
+                  {pending ? "Flexing…" : `Tap to pay ${formatMoney(amountCents)}`}
+                </span>
+              </span>
+            </button>
+          ) : (
+            <>
+              <button
+                type="submit"
+                disabled={pending}
+                aria-busy={pending}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl text-center bg-gradient-to-r from-gold to-gold-bright px-5 py-4 text-base font-black text-background shadow-[0_10px_40px_-10px_rgba(212,175,55,0.6)] transition duration-200 hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 disabled:cursor-wait disabled:opacity-80 disabled:hover:translate-y-0"
+              >
+                {pending ? (
+                  <>
+                    <span
+                      aria-hidden
+                      className="h-4 w-4 animate-spin rounded-full border-2 border-background/30 border-t-background"
+                    />
+                    Opening checkout…
+                  </>
+                ) : (
+                  <>
+                    <span aria-hidden>🔒</span>
+                    Continue to secure checkout · {formatMoney(amountCents)}
+                  </>
+                )}
+              </button>
+              <p className="mt-2 text-center text-xs text-muted">
+                You&apos;ll pay on Stripe&apos;s secure page. FLEX never sees your card.
+              </p>
+            </>
+          )}
         </form>
 
         {error && (
@@ -126,9 +167,17 @@ export default function CheckoutSheet({
           </p>
         )}
 
-        <p className="mt-3 text-center text-[11px] text-muted">
-          This is a demo. No card details are collected and nothing is charged.
-        </p>
+        {mode === "fake" && (
+          <p className="mt-3 text-center text-[11px] text-muted">
+            This is a demo. No card details are collected and nothing is charged.
+          </p>
+        )}
+        {mode === "stripe-live" && (
+          <p className="mt-3 text-center text-[11px] leading-relaxed text-muted">
+            Payments are processed by Stripe. Flex is a digital status item with no cash value and is
+            non-refundable except where required by law.
+          </p>
+        )}
       </div>
     </div>
   );

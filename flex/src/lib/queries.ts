@@ -32,7 +32,7 @@ function toEntries(rows: UserWithCents[]): LeaderboardEntry[] {
 export async function getLeaderboard(period: Period, limit = 100): Promise<LeaderboardEntry[]> {
   if (period === "week") {
     const rows = await all<UserWithCents>(
-      `SELECT ${PUBLIC_COLS}, SUM(p.amount_cents) AS cents
+      `SELECT ${PUBLIC_COLS}, SUM(p.amount_cents - p.refunded_cents) AS cents
        FROM purchases p JOIN users u ON u.id = p.user_id
        WHERE p.created_at >= ?
        GROUP BY u.id
@@ -98,8 +98,8 @@ export async function getUserPurchaseStats(
   userId: number,
 ): Promise<{ count: number; biggestCents: number }> {
   const row = await get<{ count: number; biggest: number }>(
-    `SELECT COUNT(*) AS count, COALESCE(MAX(amount_cents), 0) AS biggest
-     FROM purchases WHERE user_id = ?`,
+    `SELECT COUNT(*) AS count, COALESCE(MAX(amount_cents - refunded_cents), 0) AS biggest
+     FROM purchases WHERE user_id = ? AND refunded_cents < amount_cents`,
     [userId],
   );
   return { count: Number(row?.count ?? 0), biggestCents: Number(row?.biggest ?? 0) };

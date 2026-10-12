@@ -54,7 +54,27 @@ async function open(): Promise<Client> {
   if (url === LOCAL_URL) fs.mkdirSync("data", { recursive: true });
   const client = createClient({ url, authToken: process.env.TURSO_AUTH_TOKEN });
   await client.executeMultiple(SCHEMA);
+  await migrate(client);
   return client;
+}
+
+/** Add columns introduced after the first release (CREATE TABLE IF NOT EXISTS won't add them). */
+async function migrate(client: Client): Promise<void> {
+  const cols = new Set(
+    (await client.execute("PRAGMA table_info(purchases)")).rows.map((r) => String(r.name)),
+  );
+  const add: [string, string][] = [
+    ["stripe_session_id", "TEXT"], // Stripe Checkout Session id; NULL for fake/test-mode purchases
+    ["stripe_payment_intent", "TEXT"], // used to match refunds and disputes
+    ["refunded_cents", "INTEGER NOT NULL DEFAULT 0"], // amount taken back via refund/dispute
+  ];
+  for (const [name, type] of add) {
+    if (!cols.has(name)) await client.execute(`ALTER TABLE purchases ADD COLUMN ${name} ${type}`);
+  }
+  await client.executeMultiple(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_purchases_session ON purchases(stripe_session_id);
+    CREATE INDEX IF NOT EXISTS idx_purchases_intent ON purchases(stripe_payment_intent);
+  `);
 }
 
 export function getDb(): Promise<Client> {

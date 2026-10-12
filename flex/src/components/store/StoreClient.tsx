@@ -3,6 +3,7 @@
 import { useActionState, useState } from "react";
 import Link from "next/link";
 import { checkoutAction, type CheckoutState } from "@/app/store/actions";
+import type { PaymentMode } from "@/lib/stripe";
 import { formatMoney } from "@/lib/tiers";
 import { PACKS } from "./packs";
 import CheckoutSheet from "./CheckoutSheet";
@@ -14,7 +15,7 @@ const MAX_CUSTOM = 10_000;
 
 const INITIAL: CheckoutState = { status: "idle" };
 
-export default function StoreClient({ loggedIn }: { loggedIn: boolean }) {
+export default function StoreClient({ loggedIn, mode }: { loggedIn: boolean; mode: PaymentMode }) {
   const [state, formAction, isPending] = useActionState(checkoutAction, INITIAL);
   const [selected, setSelected] = useState<{ cents: number; label: string } | null>(null);
   const [message, setMessage] = useState("");
@@ -168,15 +169,23 @@ export default function StoreClient({ loggedIn }: { loggedIn: boolean }) {
         )}
       </section>
 
-      <p className="text-center text-xs text-muted">
-        🧪 Test mode — payments are simulated and no real money is charged.
-      </p>
+      {mode === "fake" ? (
+        <p className="text-center text-xs text-muted">
+          🧪 Test mode — payments are simulated and no real money is charged.
+        </p>
+      ) : (
+        <p className="text-center text-xs text-muted">
+          🔒 Secure checkout by Stripe.
+          {mode === "stripe-test" && " Test mode — no real money is charged."}
+        </p>
+      )}
 
       {sheetOpen && selected && (
         <CheckoutSheet
           amountCents={selected.cents}
           label={selected.label}
           message={message}
+          mode={mode}
           pending={isPending}
           error={attempted && state.status === "error" ? state.error : null}
           action={formAction}

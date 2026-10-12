@@ -1,8 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { rankFor, recordPurchase } from "@/lib/purchases";
+import { createCheckout, paymentMode } from "@/lib/stripe";
 import { tierFor } from "@/lib/tiers";
 
 export type CheckoutState =
@@ -29,8 +32,24 @@ export async function checkoutAction(
   const amountCents = Number(formData.get("amount_cents"));
   const message = String(formData.get("message") ?? "");
 
+  if (paymentMode() !== "fake") {
+    // Real payment: send the user to Stripe Checkout. The purchase is recorded only after
+    // Stripe confirms payment (success page + webhook), never here.
+    let url: string;
+    try {
+      const h = await headers();
+      const host = h.get("x-forwarded-host") ?? h.get("host");
+      const proto = h.get("x-forwarded-proto") ?? (host?.startsWith("localhost") ? "http" : "https");
+      url = await createCheckout({ userId: user.id, amountCents, message, origin: `${proto}://${host}` });
+    } catch (err) {
+      console.error("Stripe checkout failed", err);
+      return { status: "error", error: "Couldn't start checkout. Please try again." };
+    }
+    redirect(url); // outside try: redirect() works by throwing
+  }
+
   try {
-    // FAKE PAYMENT: no charge happens. See recordPurchase() for where Stripe will plug in.
+    // FAKE PAYMENT (no STRIPE_SECRET_KEY set): nobody is charged.
     const result = await recordPurchase(user.id, amountCents, message);
     revalidatePath("/");
     revalidatePath("/feed");

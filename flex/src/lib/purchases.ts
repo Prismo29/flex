@@ -13,6 +13,9 @@ export type PurchaseResult = {
   newTierName: string;
 };
 
+/** Stripe ids stored with a real payment, so it is recorded once and refunds can find it. */
+export type StripeRef = { sessionId: string; paymentIntentId: string | null };
+
 /** Returns an error message if the amount is not purchasable, otherwise null. */
 export function validateAmount(amountCents: number): string | null {
   if (!Number.isInteger(amountCents)) return "Amount must be a whole number of cents.";
@@ -23,33 +26,31 @@ export function validateAmount(amountCents: number): string | null {
   return null;
 }
 
+export function cleanMessage(message?: string | null): string {
+  return (
+    (message ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_FLEX_MESSAGE) || DEFAULT_FLEX_MESSAGE
+  );
+}
+
 /**
- * Record a purchase of flex for a user.
+ * Record a purchase of flex for a user: insert purchase, bump user's total, auto-post to feed,
+ * all in one transaction.
  *
- * ┌──────────────────────────────────────────────────────────────────────────┐
- * │ STRIPE PLUGS IN HERE.                                                   │
- * │ Payments are FAKE right now: this function is called directly by the    │
- * │ store's Server Action and nobody is charged. When Stripe is added, the  │
- * │ Server Action should create a Checkout Session / PaymentIntent instead, │
- * │ and THIS function should be called from the Stripe webhook handler      │
- * │ (e.g. on `checkout.session.completed`) once payment is confirmed. Store │
- * │ the Stripe payment id on the purchase row for idempotency.              │
- * └──────────────────────────────────────────────────────────────────────────┘
- *
- * Runs in a single transaction: insert purchase, bump user's total, auto-post to feed.
+ * With Stripe configured this is only called once a payment is confirmed (see lib/stripe.ts),
+ * from both the webhook and the success page. Passing `stripe` makes it idempotent: a session
+ * that was already recorded is not counted twice.
+ * Without Stripe (local dev / demo) the store calls it directly and nobody is charged.
  */
 export async function recordPurchase(
   userId: number,
   amountCents: number,
-  message?: string,
+  message?: string | null,
+  stripe?: StripeRef,
 ): Promise<PurchaseResult> {
   const invalid = validateAmount(amountCents);
   if (invalid) throw new Error(invalid);
 
-  const body =
-    (message ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_FLEX_MESSAGE) ||
-    DEFAULT_FLEX_MESSAGE;
-
+  const body = cleanMessage(message);
   const now = Date.now();
 
   return transaction(async (tx) => {
@@ -59,10 +60,24 @@ export async function recordPurchase(
       tx,
     );
     if (!before) throw new Error("User not found.");
+    const beforeCents = Number(before.total_spent_cents);
+
+    if (stripe) {
+      const existing = await get("SELECT 1 FROM purchases WHERE stripe_session_id = ?", [stripe.sessionId], tx);
+      if (existing) {
+        // Already recorded (webhook and success page both fulfil). Report the current state.
+        return {
+          newTotalCents: beforeCents,
+          tierChanged: tierFor(beforeCents - amountCents).name !== tierFor(beforeCents).name,
+          newTierName: tierFor(beforeCents).name,
+        };
+      }
+    }
 
     await run(
-      "INSERT INTO purchases (user_id, amount_cents, created_at) VALUES (?, ?, ?)",
-      [userId, amountCents, now],
+      `INSERT INTO purchases (user_id, amount_cents, created_at, stripe_session_id, stripe_payment_intent)
+       VALUES (?, ?, ?, ?, ?)`,
+      [userId, amountCents, now, stripe?.sessionId ?? null, stripe?.paymentIntentId ?? null],
       tx,
     );
     await run(
@@ -76,14 +91,53 @@ export async function recordPurchase(
       tx,
     );
 
-    const newTotalCents = Number(before.total_spent_cents) + amountCents;
-    const oldTier = tierFor(Number(before.total_spent_cents));
-    const newTier = tierFor(newTotalCents);
+    const newTotalCents = beforeCents + amountCents;
     return {
       newTotalCents,
-      tierChanged: oldTier.name !== newTier.name,
-      newTierName: newTier.name,
+      tierChanged: tierFor(beforeCents).name !== tierFor(newTotalCents).name,
+      newTierName: tierFor(newTotalCents).name,
     };
+  });
+}
+
+/**
+ * Take back money that was refunded or disputed, so nobody keeps rank they didn't pay for.
+ * `reversedTotalCents` is the total amount now reversed for that payment (Stripe reports the
+ * running total), so calling this again with the same number does nothing.
+ */
+export async function reversePurchase(paymentIntentId: string, reversedTotalCents: number): Promise<void> {
+  await transaction(async (tx) => {
+    const p = await get<{
+      id: number;
+      user_id: number;
+      amount_cents: number;
+      refunded_cents: number;
+      created_at: number;
+    }>(
+      "SELECT id, user_id, amount_cents, refunded_cents, created_at FROM purchases WHERE stripe_payment_intent = ?",
+      [paymentIntentId],
+      tx,
+    );
+    if (!p) return;
+    const amount = Number(p.amount_cents);
+    const target = Math.min(amount, Math.max(0, reversedTotalCents));
+    const delta = target - Number(p.refunded_cents);
+    if (delta <= 0) return;
+
+    await run("UPDATE purchases SET refunded_cents = ? WHERE id = ?", [target, p.id], tx);
+    await run(
+      "UPDATE users SET total_spent_cents = MAX(0, total_spent_cents - ?) WHERE id = ?",
+      [delta, p.user_id],
+      tx,
+    );
+    if (target >= amount) {
+      // Fully reversed: remove the brag from the feed too.
+      await run(
+        "DELETE FROM posts WHERE user_id = ? AND kind = 'purchase' AND amount_cents = ? AND created_at = ?",
+        [p.user_id, amount, p.created_at],
+        tx,
+      );
+    }
   });
 }
 
