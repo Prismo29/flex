@@ -30,8 +30,8 @@ export default async function Home({
 
   const [me, entries, totalCents] = await Promise.all([
     getCurrentUser(),
-    Promise.resolve(getLeaderboard(period, 100)),
-    Promise.resolve(getTotalFlexedCents()),
+    getLeaderboard(period, 100),
+    getTotalFlexedCents(),
   ]);
 
   const podium = entries.slice(0, 3);
@@ -232,9 +232,9 @@ function EmptyState({ period }: { period: Period }) {
   );
 }
 
-function MyRankCard({ userId, totalCents }: { userId: number; totalCents: number }) {
-  const rank = getUserRank(userId);
-  const above = rank && rank > 1 ? getUserAtRank(rank - 1) : null;
+async function MyRankCard({ userId, totalCents }: { userId: number; totalCents: number }) {
+  const rank = await getUserRank(userId);
+  const above = rank && rank > 1 ? await getUserAtRank(rank - 1) : null;
   const toPass = above ? Math.max(1, above.cents - totalCents + 1) : 0;
 
   let headline: React.ReactNode;

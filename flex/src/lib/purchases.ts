@@ -1,5 +1,5 @@
 import "server-only";
-import { getDb } from "./db";
+import { get, run, transaction } from "./db";
 import { PACKS_CENTS, tierFor } from "./tiers";
 
 export const MIN_CUSTOM_CENTS = 100;
@@ -38,11 +38,11 @@ export function validateAmount(amountCents: number): string | null {
  *
  * Runs in a single transaction: insert purchase, bump user's total, auto-post to feed.
  */
-export function recordPurchase(
+export async function recordPurchase(
   userId: number,
   amountCents: number,
   message?: string,
-): PurchaseResult {
+): Promise<PurchaseResult> {
   const invalid = validateAmount(amountCents);
   if (invalid) throw new Error(invalid);
 
@@ -50,52 +50,49 @@ export function recordPurchase(
     (message ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_FLEX_MESSAGE) ||
     DEFAULT_FLEX_MESSAGE;
 
-  const db = getDb();
   const now = Date.now();
 
-  db.exec("BEGIN");
-  try {
-    const before = db
-      .prepare("SELECT total_spent_cents FROM users WHERE id = ?")
-      .get(userId) as { total_spent_cents: number } | undefined;
+  return transaction(async (tx) => {
+    const before = await get<{ total_spent_cents: number }>(
+      "SELECT total_spent_cents FROM users WHERE id = ?",
+      [userId],
+      tx,
+    );
     if (!before) throw new Error("User not found.");
 
-    db.prepare("INSERT INTO purchases (user_id, amount_cents, created_at) VALUES (?, ?, ?)").run(
-      userId,
-      amountCents,
-      now,
+    await run(
+      "INSERT INTO purchases (user_id, amount_cents, created_at) VALUES (?, ?, ?)",
+      [userId, amountCents, now],
+      tx,
     );
-    db.prepare("UPDATE users SET total_spent_cents = total_spent_cents + ? WHERE id = ?").run(
-      amountCents,
-      userId,
+    await run(
+      "UPDATE users SET total_spent_cents = total_spent_cents + ? WHERE id = ?",
+      [amountCents, userId],
+      tx,
     );
-    db.prepare(
+    await run(
       "INSERT INTO posts (user_id, kind, body, amount_cents, created_at) VALUES (?, 'purchase', ?, ?, ?)",
-    ).run(userId, body, amountCents, now);
+      [userId, body, amountCents, now],
+      tx,
+    );
 
-    db.exec("COMMIT");
-
-    const newTotalCents = before.total_spent_cents + amountCents;
-    const oldTier = tierFor(before.total_spent_cents);
+    const newTotalCents = Number(before.total_spent_cents) + amountCents;
+    const oldTier = tierFor(Number(before.total_spent_cents));
     const newTier = tierFor(newTotalCents);
     return {
       newTotalCents,
       tierChanged: oldTier.name !== newTier.name,
       newTierName: newTier.name,
     };
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
+  });
 }
 
 /** 1-based leaderboard rank of a user by total spent. */
-export function rankFor(userId: number): number {
-  const row = getDb()
-    .prepare(
-      `SELECT COUNT(*) + 1 AS rank FROM users
-       WHERE total_spent_cents > (SELECT total_spent_cents FROM users WHERE id = ?)`,
-    )
-    .get(userId) as { rank: number } | undefined;
+export async function rankFor(userId: number): Promise<number> {
+  const row = await get<{ rank: number }>(
+    `SELECT COUNT(*) + 1 AS rank FROM users
+     WHERE total_spent_cents > (SELECT total_spent_cents FROM users WHERE id = ?)`,
+    [userId],
+  );
   return Number(row?.rank ?? 1);
 }

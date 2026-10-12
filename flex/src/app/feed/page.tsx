@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { getCurrentUser } from "@/lib/auth";
-import { getDb } from "@/lib/db";
+import { all } from "@/lib/db";
 import { formatMoney } from "@/lib/tiers";
 import Avatar from "@/components/Avatar";
 import TierBadge from "@/components/TierBadge";
@@ -25,16 +25,15 @@ type FeedRow = {
   total_spent_cents: number;
 };
 
-function getFeed(limit = 50): FeedRow[] {
-  return getDb()
-    .prepare(
+function getFeed(limit = 50): Promise<FeedRow[]> {
+  return all<FeedRow>(
       `SELECT p.id, p.kind, p.body, p.amount_cents, p.created_at,
               u.username, u.display_name, u.avatar_color, u.total_spent_cents
        FROM posts p JOIN users u ON u.id = p.user_id
        ORDER BY p.created_at DESC, p.id DESC
        LIMIT ?`,
-    )
-    .all(limit) as unknown as FeedRow[];
+    [limit],
+  );
 }
 
 /** "just now", "3m ago", "5h ago", "2d ago", then a short date. */
@@ -104,7 +103,7 @@ function PostCard({ post, now }: { post: FeedRow; now: number }) {
 
 export default async function FeedPage() {
   const user = await getCurrentUser();
-  const posts = getFeed();
+  const posts = await getFeed();
   const now = Date.now();
 
   return (

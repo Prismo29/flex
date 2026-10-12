@@ -35,7 +35,7 @@ function decode(raw: string): string {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { username } = await params;
-  const user = getUserByUsername(decode(username));
+  const user = await getUserByUsername(decode(username));
   if (!user) return { title: "User not found — FLEX" };
   return {
     title: `${user.display_name} (@${user.username}) — FLEX`,
@@ -57,15 +57,17 @@ function timeAgo(ms: number): string {
 
 export default async function ProfilePage({ params }: Props) {
   const { username } = await params;
-  const user = getUserByUsername(decode(username));
+  const user = await getUserByUsername(decode(username));
   if (!user) notFound();
 
   const me = await getCurrentUser();
   const isMe = me?.id === user.id;
 
-  const rank = getUserRank(user.id);
-  const stats = getUserPurchaseStats(user.id);
-  const posts = getUserPosts(user.id, 30);
+  const [rank, stats, posts] = await Promise.all([
+    getUserRank(user.id),
+    getUserPurchaseStats(user.id),
+    getUserPosts(user.id, 30),
+  ]);
 
   const total = user.total_spent_cents;
   const tier = tierFor(total);

@@ -1,7 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { getDb } from "./db";
+import { get, run } from "./db";
 import { endSession, hashPassword, startSession, verifyPassword } from "./auth";
 
 export type AuthFormState = {
@@ -50,20 +50,18 @@ export async function signup(_prev: AuthFormState, formData: FormData): Promise<
   }
   if (Object.keys(fieldErrors).length) return { fieldErrors, values };
 
-  const db = getDb();
-  const taken = db.prepare("SELECT 1 FROM users WHERE username = ? COLLATE NOCASE").get(username);
+  const taken = await get("SELECT 1 FROM users WHERE username = ? COLLATE NOCASE", [username]);
   if (taken) return { fieldErrors: { username: "That username is taken." }, values };
 
   const color = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
   let userId: number;
   try {
-    const result = db
-      .prepare(
-        `INSERT INTO users (username, password_hash, display_name, avatar_color, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(username, hashPassword(password), displayName, color, Date.now());
-    userId = Number(result.lastInsertRowid);
+    const result = await run(
+      `INSERT INTO users (username, password_hash, display_name, avatar_color, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [username, hashPassword(password), displayName, color, Date.now()],
+    );
+    userId = result.lastInsertRowid;
   } catch {
     // Most likely a race on the UNIQUE username constraint.
     return { fieldErrors: { username: "That username is taken." }, values };
@@ -83,9 +81,10 @@ export async function login(_prev: AuthFormState, formData: FormData): Promise<A
     return { error: "Enter your username and password.", values };
   }
 
-  const row = getDb()
-    .prepare("SELECT id, password_hash FROM users WHERE username = ? COLLATE NOCASE")
-    .get(username) as { id: number; password_hash: string } | undefined;
+  const row = await get<{ id: number; password_hash: string }>(
+    "SELECT id, password_hash FROM users WHERE username = ? COLLATE NOCASE",
+    [username],
+  );
 
   if (!row || !verifyPassword(password, row.password_hash)) {
     return { error: "Wrong username or password.", values };

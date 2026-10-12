@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth";
-import { getDb } from "@/lib/db";
+import { run } from "@/lib/db";
 
 const MAX_NAME = 40;
 const MAX_BIO = 160;
@@ -18,9 +18,12 @@ export async function updateProfile(formData: FormData): Promise<void> {
   const rawColor = String(formData.get("avatar_color") ?? "");
   const avatar_color = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor.toLowerCase() : me.avatar_color;
 
-  getDb()
-    .prepare("UPDATE users SET display_name = ?, bio = ?, avatar_color = ? WHERE id = ?")
-    .run(display_name, bio, avatar_color, me.id);
+  await run("UPDATE users SET display_name = ?, bio = ?, avatar_color = ? WHERE id = ?", [
+    display_name,
+    bio,
+    avatar_color,
+    me.id,
+  ]);
 
   revalidatePath(`/u/${me.username}`);
   revalidatePath("/");

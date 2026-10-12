@@ -1,7 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
-import { getDb, toPublic, type PublicUser, type UserRow } from "./db";
+import { get, run, toPublic, type PublicUser, type UserRow } from "./db";
 
 const COOKIE = "flex_session";
 const SESSION_DAYS = 30;
@@ -23,9 +23,7 @@ export function verifyPassword(password: string, stored: string): boolean {
 /** Create a session for userId and set the cookie. Call from a Route Handler or Server Action. */
 export async function startSession(userId: number): Promise<void> {
   const token = crypto.randomBytes(32).toString("hex");
-  getDb()
-    .prepare("INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)")
-    .run(token, userId, Date.now());
+  await run("INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)", [token, userId, Date.now()]);
   (await cookies()).set(COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
@@ -38,7 +36,7 @@ export async function startSession(userId: number): Promise<void> {
 export async function endSession(): Promise<void> {
   const jar = await cookies();
   const token = jar.get(COOKIE)?.value;
-  if (token) getDb().prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  if (token) await run("DELETE FROM sessions WHERE token = ?", [token]);
   jar.delete(COOKIE);
 }
 
@@ -46,11 +44,10 @@ export async function endSession(): Promise<void> {
 export async function getCurrentUser(): Promise<PublicUser | null> {
   const token = (await cookies()).get(COOKIE)?.value;
   if (!token) return null;
-  const row = getDb()
-    .prepare(
-      `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
-       WHERE s.token = ? AND s.created_at > ?`,
-    )
-    .get(token, Date.now() - SESSION_DAYS * 24 * 60 * 60 * 1000) as UserRow | undefined;
+  const row = await get<UserRow>(
+    `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
+     WHERE s.token = ? AND s.created_at > ?`,
+    [token, Date.now() - SESSION_DAYS * 24 * 60 * 60 * 1000],
+  );
   return row ? toPublic(row) : null;
 }

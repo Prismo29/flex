@@ -31,7 +31,7 @@ export async function checkoutAction(
 
   try {
     // FAKE PAYMENT: no charge happens. See recordPurchase() for where Stripe will plug in.
-    const result = recordPurchase(user.id, amountCents, message);
+    const result = await recordPurchase(user.id, amountCents, message);
     revalidatePath("/");
     revalidatePath("/feed");
     revalidatePath("/store");
@@ -42,7 +42,7 @@ export async function checkoutAction(
       amountCents,
       ...result,
       newTierEmoji: tierFor(result.newTotalCents).emoji,
-      rank: rankFor(user.id),
+      rank: await rankFor(user.id),
     };
   } catch (err) {
     return {

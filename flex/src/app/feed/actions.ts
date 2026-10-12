@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth";
-import { getDb } from "@/lib/db";
+import { run } from "@/lib/db";
 
 // Note: "use server" files may only export async functions (types are fine).
 const MAX_POST_LENGTH = 280;
@@ -19,9 +19,10 @@ export async function createPostAction(_prev: PostState, formData: FormData): Pr
     return { ok: false, error: `Keep it under ${MAX_POST_LENGTH} characters.` };
   }
 
-  getDb()
-    .prepare("INSERT INTO posts (user_id, kind, body, amount_cents, created_at) VALUES (?, 'post', ?, NULL, ?)")
-    .run(user.id, body, Date.now());
+  await run(
+    "INSERT INTO posts (user_id, kind, body, amount_cents, created_at) VALUES (?, 'post', ?, NULL, ?)",
+    [user.id, body, Date.now()],
+  );
 
   revalidatePath("/feed");
   revalidatePath("/");

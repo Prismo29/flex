@@ -1,22 +1,17 @@
-// Seeds data/flex.db with demo users, purchases and posts.
+// Seeds the database with demo users, purchases and posts.
 //   node scripts/seed.mjs          -> seeds only if "goldfinger" doesn't exist yet
 //   node scripts/seed.mjs --reset  -> wipes all tables first, then seeds
+// Uses data/flex.db locally, or the Turso database in TURSO_DATABASE_URL / TURSO_AUTH_TOKEN if set.
 // All demo users have the password "password123".
-import { DatabaseSync } from "node:sqlite";
+import { createClient } from "@libsql/client";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
 
 const RESET = process.argv.includes("--reset");
-const DATA_DIR = path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "flex.db");
 const PASSWORD = "password123";
 
 // Keep in sync with src/lib/db.ts
 const SCHEMA = `
-  PRAGMA journal_mode = WAL;
-  PRAGMA foreign_keys = ON;
-
   CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -132,82 +127,73 @@ function split(totalCents, n) {
   return parts;
 }
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
-const db = new DatabaseSync(DB_PATH);
-db.exec(SCHEMA);
+const url = process.env.TURSO_DATABASE_URL || "file:data/flex.db";
+if (!process.env.TURSO_DATABASE_URL) fs.mkdirSync("data", { recursive: true });
+const db = createClient({ url, authToken: process.env.TURSO_AUTH_TOKEN });
+console.log(`Database: ${process.env.TURSO_DATABASE_URL ? url : "local file data/flex.db"}`);
+await db.executeMultiple(SCHEMA);
 
 if (RESET) {
-  db.exec("DELETE FROM posts; DELETE FROM purchases; DELETE FROM sessions; DELETE FROM users;");
-  try {
-    db.exec("DELETE FROM sqlite_sequence WHERE name IN ('users','purchases','posts');");
-  } catch {
-    /* sqlite_sequence may not exist yet */
-  }
+  await db.executeMultiple(
+    "DELETE FROM posts; DELETE FROM purchases; DELETE FROM sessions; DELETE FROM users; DELETE FROM sqlite_sequence;",
+  );
   console.log("Reset: wiped users, sessions, purchases, posts.");
 } else {
-  const exists = db.prepare("SELECT 1 FROM users WHERE username = ?").get("goldfinger");
-  if (exists) {
+  const { rows } = await db.execute({ sql: "SELECT 1 FROM users WHERE username = ?", args: ["goldfinger"] });
+  if (rows.length) {
     console.log('Seed data already present (user "goldfinger" exists). Use `npm run seed:reset` to reseed.');
     db.close();
     process.exit(0);
   }
 }
 
-const insertUser = db.prepare(
-  `INSERT INTO users (username, password_hash, display_name, bio, avatar_color, total_spent_cents, created_at)
-   VALUES (?, ?, ?, ?, ?, ?, ?)`,
-);
-const insertPurchase = db.prepare("INSERT INTO purchases (user_id, amount_cents, created_at) VALUES (?, ?, ?)");
-const insertPost = db.prepare(
-  "INSERT INTO posts (user_id, kind, body, amount_cents, created_at) VALUES (?, ?, ?, ?, ?)",
-);
+// Build every insert up front and send them as one atomic batch (one round trip to Turso).
+const stmts = [];
+const userId = "(SELECT id FROM users WHERE username = ?)";
+const post = (username, kind, body, cents, at) =>
+  stmts.push({
+    sql: `INSERT INTO posts (user_id, kind, body, amount_cents, created_at) VALUES (${userId}, ?, ?, ?, ?)`,
+    args: [username, kind, body, cents, at],
+  });
 
-db.exec("BEGIN");
-try {
-  for (const [i, u] of USERS.entries()) {
-    const totalCents = Math.round(u.total * 100);
-    const amounts = split(totalCents, u.purchases);
-    // Timestamps over the last 30 days; most users get at least one buy in the last 7 days.
-    const times = amounts
-      .map((_, k) => {
-        const recent = k === 0 && i % 4 !== 3; // 3 of every 4 users flexed this week
-        const ageDays = recent ? rand() * 6.5 : 0.5 + rand() * 29;
-        return Math.round(NOW - ageDays * DAY);
-      })
-      .sort((a, b) => a - b);
-    const createdAt = times[0] - Math.round((1 + rand() * 5) * DAY);
+for (const [i, u] of USERS.entries()) {
+  const totalCents = Math.round(u.total * 100);
+  const amounts = split(totalCents, u.purchases);
+  // Timestamps over the last 30 days; most users get at least one buy in the last 7 days.
+  const times = amounts
+    .map((_, k) => {
+      const recent = k === 0 && i % 4 !== 3; // 3 of every 4 users flexed this week
+      const ageDays = recent ? rand() * 6.5 : 0.5 + rand() * 29;
+      return Math.round(NOW - ageDays * DAY);
+    })
+    .sort((a, b) => a - b);
+  const createdAt = times[0] - Math.round((1 + rand() * 5) * DAY);
 
-    const { lastInsertRowid } = insertUser.run(
-      u.username,
-      hashPassword(PASSWORD),
-      u.display,
-      u.bio,
-      u.color,
-      totalCents,
-      createdAt,
-    );
-    const userId = Number(lastInsertRowid);
+  stmts.push({
+    sql: `INSERT INTO users (username, password_hash, display_name, bio, avatar_color, total_spent_cents, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    args: [u.username, hashPassword(PASSWORD), u.display, u.bio, u.color, totalCents, createdAt],
+  });
 
-    amounts.forEach((cents, k) => {
-      insertPurchase.run(userId, cents, times[k]);
-      insertPost.run(userId, "purchase", pick(BRAGS), cents, times[k]);
+  amounts.forEach((cents, k) => {
+    stmts.push({
+      sql: `INSERT INTO purchases (user_id, amount_cents, created_at) VALUES (${userId}, ?, ?)`,
+      args: [u.username, cents, times[k]],
     });
+    post(u.username, "purchase", pick(BRAGS), cents, times[k]);
+  });
 
-    // 1-2 text posts for most users
-    const textCount = i % 3 === 2 ? 1 : 2;
-    for (let k = 0; k < textCount; k++) {
-      const at = Math.round(NOW - rand() * 20 * DAY);
-      insertPost.run(userId, "post", pick(TEXT_POSTS), null, Math.max(at, createdAt + DAY));
-    }
+  // 1-2 text posts for most users
+  const textCount = i % 3 === 2 ? 1 : 2;
+  for (let k = 0; k < textCount; k++) {
+    const at = Math.round(NOW - rand() * 20 * DAY);
+    post(u.username, "post", pick(TEXT_POSTS), null, Math.max(at, createdAt + DAY));
   }
-  db.exec("COMMIT");
-} catch (err) {
-  db.exec("ROLLBACK");
-  throw err;
 }
+await db.batch(stmts, "write");
 
-const count = (t) => db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n;
+const count = async (t) => Number((await db.execute(`SELECT COUNT(*) AS n FROM ${t}`)).rows[0].n);
 console.log(
-  `Seeded: ${count("users")} users, ${count("purchases")} purchases, ${count("posts")} posts. Password for all: ${PASSWORD}`,
+  `Seeded: ${await count("users")} users, ${await count("purchases")} purchases, ${await count("posts")} posts. Password for all: ${PASSWORD}`,
 );
 db.close();
