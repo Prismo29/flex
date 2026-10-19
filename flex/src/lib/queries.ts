@@ -20,7 +20,7 @@ export type PostRow = {
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
-const PUBLIC_COLS = `u.id, u.username, u.display_name, u.bio, u.avatar_color, u.total_spent_cents, u.created_at`;
+const PUBLIC_COLS = `u.id, u.username, u.display_name, u.bio, u.avatar_color, u.total_spent_cents, u.created_at, u.avatar_media_id`;
 
 type UserWithCents = PublicUser & { cents: number };
 

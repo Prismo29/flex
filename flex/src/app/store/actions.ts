@@ -52,7 +52,7 @@ export async function checkoutAction(
     // FAKE PAYMENT (no STRIPE_SECRET_KEY set): nobody is charged.
     const result = await recordPurchase(user.id, amountCents, message);
     revalidatePath("/");
-    revalidatePath("/feed");
+    revalidatePath("/leaderboard");
     revalidatePath("/store");
     revalidatePath(`/u/${user.username}`);
     return {

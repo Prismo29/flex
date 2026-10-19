@@ -46,6 +46,45 @@ const SCHEMA = `
     created_at   INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at);
+
+  CREATE TABLE IF NOT EXISTS follows (
+    follower_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    followee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (follower_id, followee_id)
+  );
+  CREATE TABLE IF NOT EXISTS likes (
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    post_id    INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, post_id)
+  );
+  CREATE TABLE IF NOT EXISTS comments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id    INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS notifications (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    actor_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type         TEXT NOT NULL,
+    post_id      INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+    amount_cents INTEGER,
+    created_at   INTEGER NOT NULL,
+    read_at      INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS media (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    mime       TEXT NOT NULL,
+    bytes      BLOB NOT NULL,
+    width      INTEGER NOT NULL DEFAULT 0,
+    height     INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
 `;
 
 // Same format as hashPassword() in src/lib/auth.ts
@@ -135,9 +174,9 @@ await db.executeMultiple(SCHEMA);
 
 if (RESET) {
   await db.executeMultiple(
-    "DELETE FROM posts; DELETE FROM purchases; DELETE FROM sessions; DELETE FROM users; DELETE FROM sqlite_sequence;",
+    "DELETE FROM notifications; DELETE FROM comments; DELETE FROM likes; DELETE FROM follows; DELETE FROM media; DELETE FROM posts; DELETE FROM purchases; DELETE FROM sessions; DELETE FROM users; DELETE FROM sqlite_sequence;",
   );
-  console.log("Reset: wiped users, sessions, purchases, posts.");
+  console.log("Reset: wiped all tables.");
 } else {
   const { rows } = await db.execute({ sql: "SELECT 1 FROM users WHERE username = ?", args: ["goldfinger"] });
   if (rows.length) {
@@ -192,8 +231,68 @@ for (const [i, u] of USERS.entries()) {
 }
 await db.batch(stmts, "write");
 
+// Social layer: follows, respect (likes) and comments between the demo users.
+const COMMENTS = [
+  "Is that all? 😂",
+  "Respect. Coming for you next week.",
+  "My accountant just fainted reading this.",
+  "Okay big spender 👀",
+  "This is the content I'm here for.",
+  "Pocket change for some of us.",
+  "Teach me your ways.",
+  "The leaderboard is shaking.",
+  "Nah this is crazy 💸",
+  "W flex",
+];
+const ids = Object.fromEntries(
+  (await db.execute("SELECT id, username FROM users")).rows.map((r) => [r.username, Number(r.id)]),
+);
+const posts = (await db.execute("SELECT id, user_id, created_at, amount_cents FROM posts")).rows.map((r) => ({
+  id: Number(r.id),
+  userId: Number(r.user_id),
+  at: Number(r.created_at),
+  cents: Number(r.amount_cents ?? 0),
+}));
+const social = [];
+const names = USERS.map((u) => u.username);
+names.forEach((name, i) => {
+  // Everyone follows a few people; the richer you are, the more followers you get.
+  for (const [j, other] of names.entries()) {
+    if (other === name) continue;
+    const chance = j < i ? 0.75 - j * 0.04 : 0.12;
+    if (rand() < chance) {
+      social.push({
+        sql: "INSERT OR IGNORE INTO follows (follower_id, followee_id, created_at) VALUES (?, ?, ?)",
+        args: [ids[name], ids[other], Math.round(NOW - rand() * 20 * DAY)],
+      });
+    }
+  }
+});
+for (const p of posts) {
+  // Bigger flexes earn more respect.
+  const heat = Math.min(0.85, 0.15 + Math.log10(1 + p.cents / 100) * 0.18);
+  for (const name of names) {
+    if (ids[name] === p.userId || rand() > heat) continue;
+    social.push({
+      sql: "INSERT OR IGNORE INTO likes (user_id, post_id, created_at) VALUES (?, ?, ?)",
+      args: [ids[name], p.id, Math.min(NOW, p.at + Math.round(rand() * DAY))],
+    });
+  }
+  const nComments = rand() < heat ? 1 + Math.floor(rand() * 3) : 0;
+  for (let k = 0; k < nComments; k++) {
+    const by = pick(names);
+    if (ids[by] === p.userId) continue;
+    social.push({
+      sql: "INSERT INTO comments (post_id, user_id, body, created_at) VALUES (?, ?, ?, ?)",
+      args: [p.id, ids[by], pick(COMMENTS), Math.min(NOW, p.at + Math.round((k + rand()) * 3 * 3600_000))],
+    });
+  }
+}
+await db.batch(social, "write");
+
 const count = async (t) => Number((await db.execute(`SELECT COUNT(*) AS n FROM ${t}`)).rows[0].n);
 console.log(
-  `Seeded: ${await count("users")} users, ${await count("purchases")} purchases, ${await count("posts")} posts. Password for all: ${PASSWORD}`,
+  `Seeded: ${await count("users")} users, ${await count("purchases")} purchases, ${await count("posts")} posts, ` +
+    `${await count("follows")} follows, ${await count("likes")} likes, ${await count("comments")} comments. Password for all: ${PASSWORD}`,
 );
 db.close();

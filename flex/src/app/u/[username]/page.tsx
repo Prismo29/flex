@@ -3,39 +3,25 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import Avatar from "@/components/Avatar";
 import TierBadge from "@/components/TierBadge";
+import FeedList from "@/components/social/FeedList";
 import { getCurrentUser } from "@/lib/auth";
-import { getUserByUsername, getUserPosts, getUserPurchaseStats, getUserRank, type PostRow } from "@/lib/queries";
+import { decodeUsername } from "@/lib/format";
+import { getUserByUsername, getUserPurchaseStats, getUserRank } from "@/lib/queries";
+import { getFeedPage, getFollowCounts, isFollowing } from "@/lib/social";
 import { formatMoney, nextTier, tierFor } from "@/lib/tiers";
-import { updateProfile } from "./actions";
+import type { FeedScope } from "@/lib/types";
+import ProfileActions from "./ProfileActions";
 
 export const dynamic = "force-dynamic";
 
-type Props = { params: Promise<{ username: string }> };
-
-const AVATAR_COLORS = [
-  "#d4af37",
-  "#f5d77a",
-  "#cd7f32",
-  "#c0c0c0",
-  "#9fd8e8",
-  "#7df9ff",
-  "#b57edc",
-  "#ef5350",
-  "#4caf50",
-  "#ff8a3d",
-];
-
-function decode(raw: string): string {
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
+type Props = {
+  params: Promise<{ username: string }>;
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+};
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { username } = await params;
-  const user = await getUserByUsername(decode(username));
+  const user = await getUserByUsername(decodeUsername(username));
   if (!user) return { title: "User not found — FLEX" };
   return {
     title: `${user.display_name} (@${user.username}) — FLEX`,
@@ -43,65 +29,83 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   };
 }
 
-function timeAgo(ms: number): string {
-  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-  if (s < 60) return "just now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  const d = Math.floor(h / 24);
-  if (d < 7) return `${d}d`;
-  return new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
+const TABS = [
+  { key: "all", label: "Posts" },
+  { key: "flexes", label: "Flexes" },
+] as const;
 
-export default async function ProfilePage({ params }: Props) {
+export default async function ProfilePage({ params, searchParams }: Props) {
   const { username } = await params;
-  const user = await getUserByUsername(decode(username));
+  const sp = await searchParams;
+  const user = await getUserByUsername(decodeUsername(username));
   if (!user) notFound();
 
   const me = await getCurrentUser();
   const isMe = me?.id === user.id;
+  const tab = sp.tab === "flexes" ? "flexes" : "all";
+  const scope: FeedScope = { kind: "user", userId: user.id, ...(tab === "flexes" ? { only: "purchase" as const } : {}) };
 
-  const [rank, stats, posts] = await Promise.all([
+  const [rank, stats, counts, following, followsYou, page] = await Promise.all([
     getUserRank(user.id),
     getUserPurchaseStats(user.id),
-    getUserPosts(user.id, 30),
+    getFollowCounts(user.id),
+    me && !isMe ? isFollowing(me.id, user.id) : false,
+    me && !isMe ? isFollowing(user.id, me.id) : false,
+    getFeedPage(scope, me?.id ?? 0),
   ]);
 
   const total = user.total_spent_cents;
   const tier = tierFor(total);
   const next = nextTier(total);
   const pct = next ? Math.min(100, Math.max(0, ((total - tier.minCents) / (next.minCents - tier.minCents)) * 100)) : 100;
-  const memberSince = new Date(user.created_at).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const memberSince = new Date(user.created_at).toLocaleDateString("en-US", { month: "short", year: "numeric" });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Header card */}
-      <section className="relative overflow-hidden rounded-3xl border border-border bg-surface px-5 pb-6 pt-8 text-center sm:px-8">
+      <section className="relative overflow-hidden rounded-3xl border border-border bg-surface">
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-x-0 -top-20 mx-auto h-48 w-72 rounded-full blur-3xl"
-          style={{ background: `radial-gradient(closest-side, ${user.avatar_color}55, transparent)` }}
+          className="h-28 sm:h-36"
+          style={{
+            background: `radial-gradient(120% 140% at 20% 0%, ${user.avatar_color}88, transparent 60%), radial-gradient(100% 120% at 100% 100%, ${tier.color}55, transparent 60%), #111114`,
+          }}
         />
-        <div className="relative flex flex-col items-center">
+        <div className="relative -mt-14 flex flex-col items-center px-5 pb-6 text-center sm:px-8">
           <div className="rounded-full p-[3px]" style={{ background: tier.color, boxShadow: `0 0 30px ${tier.color}55` }}>
-            <Avatar name={user.display_name} color={user.avatar_color} size={104} />
+            <div className="rounded-full bg-surface p-[3px]">
+              <Avatar name={user.display_name} color={user.avatar_color} mediaId={user.avatar_media_id} size={104} />
+            </div>
           </div>
-          <h1 className="mt-4 max-w-full break-words text-2xl font-black tracking-tight sm:text-3xl">{user.display_name}</h1>
+          <h1 className="mt-3 max-w-full break-words text-2xl font-black tracking-tight sm:text-3xl">{user.display_name}</h1>
           <p className="text-sm text-muted">@{user.username}</p>
           <div className="mt-2">
             <TierBadge totalCents={total} size="md" />
           </div>
-          {user.bio && (
-            <p className="mt-4 max-w-md whitespace-pre-line break-words text-sm text-foreground/90">{user.bio}</p>
-          )}
+          {user.bio && <p className="mt-3 max-w-md whitespace-pre-line break-words text-[15px] text-foreground/90">{user.bio}</p>}
 
-          <p className="mt-6 text-xs font-semibold uppercase tracking-[0.25em] text-muted">Total spent</p>
+          <ProfileActions
+            userId={user.id}
+            username={user.username}
+            isMe={isMe}
+            loggedIn={!!me}
+            following={following}
+            followsYou={followsYou}
+            followers={counts.followers}
+            followingCount={counts.following}
+            profile={{
+              displayName: user.display_name,
+              bio: user.bio,
+              color: user.avatar_color,
+              mediaId: user.avatar_media_id,
+            }}
+          />
+
+          <p className="mt-6 text-xs font-semibold uppercase tracking-[0.25em] text-muted">Total flexed</p>
           <p className="text-4xl font-black tabular-nums text-gold-gradient sm:text-5xl">{formatMoney(total)}</p>
 
           {/* Tier progress */}
-          <div className="mt-5 w-full max-w-sm text-left">
+          <div className="mt-4 w-full max-w-sm text-left">
             <div className="mb-1.5 flex items-center justify-between text-xs text-muted">
               <span>
                 {tier.emoji} {tier.name}
@@ -114,7 +118,13 @@ export default async function ProfilePage({ params }: Props) {
                 <span className="text-gold">Max tier reached</span>
               )}
             </div>
-            <div className="h-2.5 w-full overflow-hidden rounded-full bg-surface-2" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)}>
+            <div
+              className="h-2.5 w-full overflow-hidden rounded-full bg-surface-2"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(pct)}
+            >
               <div
                 className="h-full rounded-full"
                 style={{ width: `${pct}%`, background: "linear-gradient(90deg, #a8841f, #d4af37, #f5d77a)" }}
@@ -127,144 +137,61 @@ export default async function ProfilePage({ params }: Props) {
       {/* Stats */}
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="All-time rank" value={rank ? `#${rank}` : "—"} gold={rank !== null && rank <= 3} />
-        <Stat label="Purchases" value={stats.count.toLocaleString("en-US")} />
+        <Stat label="Flexes" value={stats.count.toLocaleString("en-US")} />
         <Stat label="Biggest flex" value={stats.biggestCents ? formatMoney(stats.biggestCents) : "—"} gold={stats.biggestCents > 0} />
-        <Stat label="Member since" value={memberSince} small />
+        <Stat label="Joined" value={memberSince} />
       </section>
 
-      {isMe && (
-        <>
-          <Link
-            href="/store"
-            className="flex items-center justify-center rounded-full bg-gold px-6 py-3 text-sm font-bold text-black transition hover:bg-gold-bright active:scale-95"
-          >
-            {rank === 1 ? "Defend your throne" : "Climb the leaderboard"} →
-          </Link>
-          <EditProfile displayName={user.display_name} bio={user.bio} color={user.avatar_color} />
-        </>
-      )}
+      {/* Tabs */}
+      <nav aria-label="Profile" className="grid grid-cols-2 border-b border-border">
+        {TABS.map((t) => {
+          const active = t.key === tab;
+          return (
+            <Link
+              key={t.key}
+              href={t.key === "all" ? `/u/${user.username}` : `/u/${user.username}?tab=${t.key}`}
+              scroll={false}
+              aria-current={active ? "page" : undefined}
+              className={`relative py-3 text-center text-sm font-semibold transition hover:bg-surface/60 ${
+                active ? "text-foreground" : "text-muted"
+              }`}
+            >
+              {t.label}
+              {active && (
+                <span className="absolute bottom-0 left-1/2 h-1 w-12 -translate-x-1/2 rounded-full bg-gradient-to-r from-gold-bright to-gold" />
+              )}
+            </Link>
+          );
+        })}
+      </nav>
 
-      {/* Posts */}
-      <section>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-muted">Recent activity</h2>
-        {posts.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-border bg-surface px-4 py-8 text-center text-sm text-muted">
-            {isMe ? "You haven't posted or flexed yet." : `${user.display_name} hasn't posted or flexed yet.`}
+      <FeedList
+        key={tab}
+        scope={scope}
+        initial={page}
+        now={Date.now()}
+        viewerId={me?.id ?? null}
+        empty={
+          <p className="rounded-2xl border border-dashed border-border bg-surface px-4 py-10 text-center text-sm text-muted">
+            {tab === "flexes"
+              ? isMe
+                ? "You haven't flexed yet. The store is right there."
+                : `${user.display_name} hasn't flexed yet. Broke?`
+              : isMe
+                ? "You haven't posted yet."
+                : `${user.display_name} hasn't posted yet.`}
           </p>
-        ) : (
-          <ul className="space-y-3">
-            {posts.map((p) => (
-              <PostItem key={p.id} post={p} name={user.display_name} />
-            ))}
-          </ul>
-        )}
-      </section>
+        }
+      />
     </div>
   );
 }
 
-function Stat({ label, value, gold, small }: { label: string; value: string; gold?: boolean; small?: boolean }) {
+function Stat({ label, value, gold }: { label: string; value: string; gold?: boolean }) {
   return (
     <div className="rounded-2xl border border-border bg-surface px-4 py-3">
       <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">{label}</p>
-      <p
-        className={`mt-1 truncate font-bold tabular-nums ${small ? "text-base" : "text-xl"} ${gold ? "text-gold-gradient" : ""}`}
-      >
-        {value}
-      </p>
+      <p className={`mt-1 truncate text-xl font-bold tabular-nums ${gold ? "text-gold-gradient" : ""}`}>{value}</p>
     </div>
-  );
-}
-
-function PostItem({ post, name }: { post: PostRow; name: string }) {
-  if (post.kind === "purchase") {
-    return (
-      <li
-        className="rounded-2xl border border-gold/40 px-4 py-3"
-        style={{ background: "linear-gradient(135deg, rgba(212,175,55,0.14), rgba(212,175,55,0.02))" }}
-      >
-        <div className="flex items-center justify-between gap-3">
-          <p className="min-w-0 text-sm">
-            <span aria-hidden>💸 </span>
-            <span className="font-semibold">{name}</span> flexed{" "}
-            <span className="font-black text-gold-gradient">{formatMoney(post.amount_cents ?? 0)}</span>
-          </p>
-          <time className="shrink-0 text-xs text-muted" dateTime={new Date(post.created_at).toISOString()}>
-            {timeAgo(post.created_at)}
-          </time>
-        </div>
-        {post.body && <p className="mt-1 whitespace-pre-line break-words text-sm text-foreground/80">{post.body}</p>}
-      </li>
-    );
-  }
-  return (
-    <li className="rounded-2xl border border-border bg-surface px-4 py-3">
-      <p className="whitespace-pre-line break-words text-sm">{post.body}</p>
-      <time className="mt-2 block text-xs text-muted" dateTime={new Date(post.created_at).toISOString()}>
-        {timeAgo(post.created_at)}
-      </time>
-    </li>
-  );
-}
-
-function EditProfile({ displayName, bio, color }: { displayName: string; bio: string; color: string }) {
-  const colors = AVATAR_COLORS.includes(color.toLowerCase()) ? AVATAR_COLORS : [color, ...AVATAR_COLORS];
-  return (
-    <details className="group rounded-2xl border border-border bg-surface">
-      <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-semibold [&::-webkit-details-marker]:hidden">
-        Edit profile
-        <span className="text-muted transition group-open:rotate-180">▾</span>
-      </summary>
-      <form action={updateProfile} className="space-y-4 border-t border-border px-4 py-4">
-        <label className="block">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted">Display name</span>
-          <input
-            name="display_name"
-            defaultValue={displayName}
-            maxLength={40}
-            required
-            className="mt-1 w-full rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-base outline-none focus:border-gold"
-          />
-        </label>
-        <label className="block">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted">Bio</span>
-          <textarea
-            name="bio"
-            defaultValue={bio}
-            maxLength={160}
-            rows={3}
-            placeholder="Tell them why you're richer than them."
-            className="mt-1 w-full resize-none rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-base outline-none focus:border-gold"
-          />
-        </label>
-        <fieldset>
-          <legend className="text-xs font-semibold uppercase tracking-wider text-muted">Avatar color</legend>
-          <div className="mt-2 flex flex-wrap gap-2.5">
-            {colors.map((c) => (
-              <label key={c} className="cursor-pointer">
-                <input
-                  type="radio"
-                  name="avatar_color"
-                  value={c}
-                  defaultChecked={c.toLowerCase() === color.toLowerCase()}
-                  className="peer sr-only"
-                />
-                <span
-                  className="block h-9 w-9 rounded-full ring-2 ring-transparent ring-offset-2 ring-offset-surface transition peer-checked:ring-gold-bright peer-focus-visible:ring-foreground"
-                  style={{ background: c }}
-                  aria-label={c}
-                />
-              </label>
-            ))}
-          </div>
-        </fieldset>
-        <button
-          type="submit"
-          className="w-full rounded-full bg-gold py-2.5 text-sm font-bold text-black transition hover:bg-gold-bright active:scale-95"
-        >
-          Save
-        </button>
-      </form>
-    </details>
   );
 }

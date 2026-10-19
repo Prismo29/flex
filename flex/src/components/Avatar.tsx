@@ -2,10 +2,26 @@ type AvatarProps = {
   name: string;
   color: string;
   size?: number;
+  /** Uploaded profile photo, if any. Falls back to the colored letter. */
+  mediaId?: number | null;
 };
 
-/** Circle with the first letter of `name` on `color`. Works in server and client components. */
-export default function Avatar({ name, color, size = 40 }: AvatarProps) {
+/** Profile photo, or a circle with the first letter of `name` on `color`. Works in server and client components. */
+export default function Avatar({ name, color, size = 40, mediaId }: AvatarProps) {
+  if (mediaId != null) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={`/m/${mediaId}`}
+        alt=""
+        width={size}
+        height={size}
+        loading="lazy"
+        className="shrink-0 rounded-full object-cover ring-1 ring-white/15 shadow-[0_2px_8px_rgba(0,0,0,0.5)]"
+        style={{ width: size, height: size, background: color }}
+      />
+    );
+  }
   const letter = (name.trim()[0] ?? "?").toUpperCase();
   return (
     <span

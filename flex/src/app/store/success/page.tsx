@@ -51,7 +51,7 @@ const defaultActions = (
     <Link href="/store" className={secondaryBtn}>
       Flex again
     </Link>
-    <Link href="/" className={primaryBtn}>
+    <Link href="/leaderboard" className={primaryBtn}>
       See the leaderboard
     </Link>
   </>
@@ -99,7 +99,7 @@ export default async function StoreSuccessPage({
         eyebrow="Almost there"
         title="Payment is still processing."
         actions={
-          <Link href="/" className={`${primaryBtn} col-span-2`}>
+          <Link href="/leaderboard" className={`${primaryBtn} col-span-2`}>
             See the leaderboard
           </Link>
         }

@@ -142,7 +142,7 @@ export default function Celebration({
             Flex again
           </button>
           <Link
-            href="/feed"
+            href="/"
             className="rounded-xl bg-gradient-to-r from-gold to-gold-bright px-4 py-3 text-sm font-bold text-background hover:brightness-110"
           >
             See the feed

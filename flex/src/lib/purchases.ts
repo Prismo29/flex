@@ -1,5 +1,6 @@
 import "server-only";
 import { get, run, transaction } from "./db";
+import { deletePostCascade, notifyPurchase } from "./social";
 import { PACKS_CENTS, tierFor } from "./tiers";
 
 export const MIN_CUSTOM_CENTS = 100;
@@ -85,13 +86,14 @@ export async function recordPurchase(
       [amountCents, userId],
       tx,
     );
-    await run(
+    const post = await run(
       "INSERT INTO posts (user_id, kind, body, amount_cents, created_at) VALUES (?, 'purchase', ?, ?, ?)",
       [userId, body, amountCents, now],
       tx,
     );
 
     const newTotalCents = beforeCents + amountCents;
+    await notifyPurchase(tx, userId, post.lastInsertRowid, amountCents, beforeCents, newTotalCents);
     return {
       newTotalCents,
       tierChanged: tierFor(beforeCents).name !== tierFor(newTotalCents).name,
@@ -132,11 +134,12 @@ export async function reversePurchase(paymentIntentId: string, reversedTotalCent
     );
     if (target >= amount) {
       // Fully reversed: remove the brag from the feed too.
-      await run(
-        "DELETE FROM posts WHERE user_id = ? AND kind = 'purchase' AND amount_cents = ? AND created_at = ?",
+      const brag = await get<{ id: number }>(
+        "SELECT id FROM posts WHERE user_id = ? AND kind = 'purchase' AND amount_cents = ? AND created_at = ?",
         [p.user_id, amount, p.created_at],
         tx,
       );
+      if (brag) await deletePostCascade(Number(brag.id), tx);
     }
   });
 }

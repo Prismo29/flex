@@ -2,57 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import Icon, { type IconName } from "./Icon";
 
-type IconName = "trophy" | "feed" | "store" | "user";
-
-function Icon({ name, className }: { name: IconName; className?: string }) {
-  const common = {
-    className,
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.8,
-    strokeLinecap: "round" as const,
-    strokeLinejoin: "round" as const,
-    "aria-hidden": true,
-  };
-  switch (name) {
-    case "trophy":
-      return (
-        <svg {...common}>
-          <path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4Z" />
-          <path d="M17 6h2.5a1.5 1.5 0 0 1 1.5 1.5V8a4 4 0 0 1-4 4M7 6H4.5A1.5 1.5 0 0 0 3 7.5V8a4 4 0 0 0 4 4" />
-        </svg>
-      );
-    case "feed":
-      return (
-        <svg {...common}>
-          <rect x="3.5" y="4" width="17" height="16" rx="2.5" />
-          <path d="M7.5 9h9M7.5 12.5h9M7.5 16h5" />
-        </svg>
-      );
-    case "store":
-      return (
-        <svg {...common}>
-          <path d="M5 8h14l-1.2 11.1a2 2 0 0 1-2 1.9H8.2a2 2 0 0 1-2-1.9L5 8Z" />
-          <path d="M9 10V7a3 3 0 0 1 6 0v3" />
-        </svg>
-      );
-    case "user":
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="8.5" r="4" />
-          <path d="M4.5 20.5a7.5 7.5 0 0 1 15 0" />
-        </svg>
-      );
-  }
-}
-
-const MAIN = [
-  { href: "/", label: "Leaderboard", icon: "trophy" },
-  { href: "/feed", label: "Feed", icon: "feed" },
-  { href: "/store", label: "Store", icon: "store" },
-] as const;
+type Item = { href: string; label: string; icon: IconName; badge?: number };
 
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
@@ -61,26 +13,49 @@ function isActive(pathname: string, href: string): boolean {
   return p === h || p.startsWith(h + "/");
 }
 
-/** Desktop inline nav links (hidden below md). */
-export function DesktopNav() {
-  const pathname = usePathname();
+function Badge({ n }: { n: number }) {
+  if (n <= 0) return null;
   return (
-    <nav className="hidden items-center gap-1 md:flex" aria-label="Main">
-      {MAIN.map((item) => {
+    <span className="absolute -right-1.5 -top-1 min-w-[18px] rounded-full bg-danger px-1 text-center text-[10px] font-bold leading-[18px] text-white ring-2 ring-background">
+      {n > 99 ? "99+" : n}
+    </span>
+  );
+}
+
+/** Left sidebar navigation (lg and up). */
+export function SideNav({ username, unread }: { username: string | null; unread: number }) {
+  const pathname = usePathname();
+  const items: Item[] = [
+    { href: "/", label: "Home", icon: "home" },
+    { href: "/explore", label: "Explore", icon: "search" },
+    { href: "/leaderboard", label: "Leaderboard", icon: "trophy" },
+    ...(username
+      ? [
+          { href: "/notifications", label: "Notifications", icon: "bell" as const, badge: unread },
+          { href: `/u/${username}`, label: "Profile", icon: "user" as const },
+        ]
+      : []),
+    { href: "/store", label: "Store", icon: "store" },
+  ];
+
+  return (
+    <nav aria-label="Main" className="flex flex-col gap-1">
+      {items.map((item) => {
         const active = isActive(pathname, item.href);
         return (
           <Link
             key={item.href}
             href={item.href}
             aria-current={active ? "page" : undefined}
-            className={`relative rounded-lg px-3 py-2 text-sm font-medium transition ${
-              active ? "text-gold-bright" : "text-muted hover:text-foreground"
+            className={`flex items-center gap-4 rounded-full px-4 py-3 text-[17px] transition hover:bg-surface-2 ${
+              active ? "font-bold text-gold-bright" : "font-medium text-foreground"
             }`}
           >
+            <span className="relative">
+              <Icon name={item.icon} filled={active} className="h-6 w-6" />
+              {item.badge != null && <Badge n={item.badge} />}
+            </span>
             {item.label}
-            {active && (
-              <span className="absolute inset-x-3 -bottom-[13px] h-0.5 rounded-full bg-gradient-to-r from-gold-bright to-gold" />
-            )}
           </Link>
         );
       })}
@@ -88,43 +63,72 @@ export function DesktopNav() {
   );
 }
 
-/** Fixed bottom tab bar for mobile (hidden at md and up). */
+/** Bell icon with unread count, for the mobile top bar. */
+export function BellLink({ unread }: { unread: number }) {
+  const pathname = usePathname();
+  const active = isActive(pathname, "/notifications");
+  return (
+    <Link
+      href="/notifications"
+      aria-label={unread > 0 ? `Notifications (${unread} unread)` : "Notifications"}
+      className={`relative rounded-full p-2 transition hover:bg-surface-2 ${active ? "text-gold-bright" : "text-foreground"}`}
+    >
+      <Icon name="bell" filled={active} className="h-6 w-6" />
+      <Badge n={unread} />
+    </Link>
+  );
+}
+
+/** Fixed bottom tab bar for mobile (hidden at lg and up). */
 export function MobileTabBar({ username }: { username: string | null }) {
   const pathname = usePathname();
-  const profile = username
-    ? { href: `/u/${username}`, label: "Profile", icon: "user" as const }
-    : { href: "/login", label: "Log in", icon: "user" as const };
-  const items = [...MAIN, profile];
+  const left: Item[] = [
+    { href: "/", label: "Home", icon: "home" },
+    { href: "/explore", label: "Explore", icon: "search" },
+  ];
+  const right: Item[] = [
+    { href: "/leaderboard", label: "Ranks", icon: "trophy" },
+    username
+      ? { href: `/u/${username}`, label: "Profile", icon: "user" }
+      : { href: "/login", label: "Log in", icon: "user" },
+  ];
+
+  const tab = (item: Item) => {
+    const active = isActive(pathname, item.href);
+    return (
+      <li key={item.label}>
+        <Link
+          href={item.href}
+          aria-current={active ? "page" : undefined}
+          className={`flex h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium transition ${
+            active ? "text-gold-bright" : "text-muted active:text-foreground"
+          }`}
+        >
+          <Icon name={item.icon} filled={active} className="h-6 w-6" />
+          {item.label}
+        </Link>
+      </li>
+    );
+  };
 
   return (
     <nav
       aria-label="Main"
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/90 backdrop-blur-xl md:hidden"
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/90 backdrop-blur-xl lg:hidden"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
-      <ul className="mx-auto grid max-w-md grid-cols-4">
-        {items.map((item) => {
-          const active =
-            isActive(pathname, item.href) ||
-            (!username && item.href === "/login" && pathname === "/signup");
-          return (
-            <li key={item.label}>
-              <Link
-                href={item.href}
-                aria-current={active ? "page" : undefined}
-                className={`relative flex h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium transition ${
-                  active ? "text-gold-bright" : "text-muted active:text-foreground"
-                }`}
-              >
-                {active && (
-                  <span className="absolute top-0 h-0.5 w-8 rounded-full bg-gradient-to-r from-gold-bright to-gold shadow-[0_0_12px_rgba(245,215,122,0.8)]" />
-                )}
-                <Icon name={item.icon} className="h-6 w-6" />
-                {item.label}
-              </Link>
-            </li>
-          );
-        })}
+      <ul className="mx-auto grid max-w-md grid-cols-5">
+        {left.map(tab)}
+        <li className="flex items-center justify-center">
+          <Link
+            href="/store"
+            aria-label="Flex money"
+            className="-mt-6 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-gold-bright via-gold to-[#a8841f] text-2xl shadow-[0_4px_24px_rgba(212,175,55,0.55)] ring-4 ring-background transition active:scale-95"
+          >
+            <span aria-hidden>💸</span>
+          </Link>
+        </li>
+        {right.map(tab)}
       </ul>
     </nav>
   );

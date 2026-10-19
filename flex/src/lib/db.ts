@@ -43,6 +43,57 @@ export const SCHEMA = `
     created_at   INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at);
+
+  -- Social graph: follower follows followee.
+  CREATE TABLE IF NOT EXISTS follows (
+    follower_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    followee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (follower_id, followee_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_follows_followee ON follows(followee_id);
+
+  -- "Respect" (likes) on posts.
+  CREATE TABLE IF NOT EXISTS likes (
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    post_id    INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, post_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_likes_post ON likes(post_id);
+
+  CREATE TABLE IF NOT EXISTS comments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id    INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id, created_at);
+
+  -- type: like | comment | follow | mention | overtaken. post_id/amount_cents depend on type.
+  CREATE TABLE IF NOT EXISTS notifications (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    actor_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type         TEXT NOT NULL,
+    post_id      INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+    amount_cents INTEGER,
+    created_at   INTEGER NOT NULL,
+    read_at      INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at);
+
+  -- Uploaded images (post photos, avatars). Small, resized client-side before upload.
+  CREATE TABLE IF NOT EXISTS media (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    mime       TEXT NOT NULL,
+    bytes      BLOB NOT NULL,
+    width      INTEGER NOT NULL DEFAULT 0,
+    height     INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
 `;
 
 declare global {
@@ -75,6 +126,19 @@ async function migrate(client: Client): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_purchases_session ON purchases(stripe_session_id);
     CREATE INDEX IF NOT EXISTS idx_purchases_intent ON purchases(stripe_payment_intent);
   `);
+
+  await addColumns(client, "posts", [["media_id", "INTEGER"]]); // optional photo
+  await addColumns(client, "users", [["avatar_media_id", "INTEGER"]]); // optional profile picture
+  await client.executeMultiple(`
+    CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id, created_at);
+  `);
+}
+
+async function addColumns(client: Client, table: string, add: [string, string][]): Promise<void> {
+  const cols = new Set((await client.execute(`PRAGMA table_info(${table})`)).rows.map((r) => String(r.name)));
+  for (const [name, type] of add) {
+    if (!cols.has(name)) await client.execute(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+  }
 }
 
 export function getDb(): Promise<Client> {
@@ -139,6 +203,7 @@ export type UserRow = {
   avatar_color: string;
   total_spent_cents: number;
   created_at: number;
+  avatar_media_id: number | null;
 };
 
 /** Public shape of a user — never includes password_hash. */
